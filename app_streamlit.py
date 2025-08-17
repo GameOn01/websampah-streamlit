@@ -1,70 +1,49 @@
 import streamlit as st
-import sqlite3, os, base64
-from pathlib import Path
 import streamlit.components.v1 as components
 from collections import Counter
+from pathlib import Path
+import firebase_admin
+from firebase_admin import credentials, firestore
+import base64
 
-DB_PATH = "database.db"
-UPLOAD_FOLDER = "static/uploads"
+# === Konfigurasi ===
 TEMPLATE_PATH = "index_template.html"
+
+# === Firebase Setup ===
+if not firebase_admin._apps:
+    cred = credentials.Certificate("websampah-31358-firebase-adminsdk-fbsvc-b5d459f63d.json")
+    firebase_admin.initialize_app(cred)
+db = firestore.client()
 
 st.set_page_config(page_title="Sistem Deteksi Sampah", layout="wide")
 
+# === Ambil semua data deteksi dari Firestore ===
 def get_detections():
-    if not Path(DB_PATH).exists():
-        return []
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute(
-            """
-            SELECT id, jenis_sampah, confidence, gambar_path,
-                   strftime('%d/%m/%Y %H:%M', waktu_deteksi) as waktu_format
-            FROM deteksi_sampah
-            ORDER BY waktu_deteksi DESC
-            """
-        ).fetchall()
+    docs = db.collection("detections").order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
+    rows = []
+    for doc in docs:
+        data = doc.to_dict()
+        rows.append(data)
     return rows
 
-def delete_all():
-    if Path(DB_PATH).exists():
-        with sqlite3.connect(DB_PATH) as conn:
-            imgs = conn.execute("SELECT gambar_path FROM deteksi_sampah").fetchall()
-            for (g,) in imgs:
-                p = Path(UPLOAD_FOLDER) / g
-                if p.exists():
-                    try:
-                        p.unlink()
-                    except Exception:
-                        pass
-            conn.execute("DELETE FROM deteksi_sampah")
-            conn.commit()
-
-def img_to_base64(path):
-    p = Path(path)
-    if not p.exists():
-        return ""
-    try:
-        data = p.read_bytes()
-        return base64.b64encode(data).decode("utf-8")
-    except Exception:
-        return ""
-
+# === Build tabel HTML ===
 def build_table_rows(data):
     rows_html = ""
-    for idx, (id_, jenis, conf, gambar, waktu) in enumerate(data, start=1):
-        persen = conf * 100.0 if conf is not None else 0.0
+    for idx, row in enumerate(data, start=1):
+        persen = row.get("confidence", 0) * 100
         if persen >= 80:
             warna = 'bg-success'
         elif persen >= 50:
             warna = 'bg-warning'
         else:
             warna = 'bg-danger'
-        img_b64 = img_to_base64(os.path.join(UPLOAD_FOLDER, gambar)) if gambar else ""
+        img_b64 = row.get("image_base64", "")
         img_tag = f'<img src="data:image/jpeg;base64,{img_b64}" class="detection-img img-thumbnail">' if img_b64 else '<span class="text-muted">Tidak ada gambar</span>'
         rows_html += f"""
         <tr>
           <td>{idx}</td>
-          <td>{waktu}</td>
-          <td>{jenis}</td>
+          <td>{row.get("timestamp","-")}</td>
+          <td>{row.get("class","-")}</td>
           <td>
             <div class="progress">
               <div class="progress-bar {warna}" style="width: {persen:.2f}%">{persen:.2f}%</div>
@@ -75,8 +54,9 @@ def build_table_rows(data):
         """
     return rows_html
 
+# === Build statistik jenis sampah ===
 def build_detail_jenis(data):
-    jenis_list = [row[1] for row in data]
+    jenis_list = [row.get("class","") for row in data]
     counter = Counter(jenis_list)
     if not counter:
         return '<p class="text-muted">Belum ada data</p>'
@@ -92,18 +72,32 @@ def build_detail_jenis(data):
         """
     return html
 
+# === Ambil gambar terbaru dari Firestore (opsional) ===
+def get_latest_firestore_image():
+    docs = db.collection("detections").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    for doc in docs:
+        data = doc.to_dict()
+        return data.get("image_base64",""), data.get("class",""), data.get("timestamp","")
+    return "", "", ""
+
+# === Layout Web ===
 left, right = st.columns([3,1], gap="large")
+
 with left:
     st.markdown("### Data Deteksi Sampah")
-    if st.button("🗑️ Hapus Semua Data", use_container_width=True):
-        delete_all()
-        st.success("Semua data berhasil dihapus.")
-        st.experimental_rerun()
+    data = get_detections()
 
-data = get_detections()
-template_html = Path(TEMPLATE_PATH).read_text(encoding="utf-8")
-template_html = template_html.replace("{{TABLE_ROWS}}", build_table_rows(data))
-template_html = template_html.replace("{{TOTAL_DETEKSI}}", str(len(data)))
-template_html = template_html.replace("{{DETAIL_JENIS}}", build_detail_jenis(data))
+    template_html = Path(TEMPLATE_PATH).read_text(encoding="utf-8")
+    template_html = template_html.replace("{{TABLE_ROWS}}", build_table_rows(data))
+    template_html = template_html.replace("{{TOTAL_DETEKSI}}", str(len(data)))
+    template_html = template_html.replace("{{DETAIL_JENIS}}", build_detail_jenis(data))
 
-components.html(template_html, height=900, scrolling=True)
+    components.html(template_html, height=900, scrolling=True)
+
+with right:
+    st.markdown("### 📷 Gambar Terbaru")
+    img_b64, cls, ts = get_latest_firestore_image()
+    if img_b64:
+        st.image(base64.b64decode(img_b64), caption=f"{cls} - {ts}", use_container_width=True)
+    else:
+        st.info("Belum ada gambar di Firestore.")
