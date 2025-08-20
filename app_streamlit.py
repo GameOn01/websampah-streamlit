@@ -11,7 +11,7 @@ TEMPLATE_PATH = "index_template.html"
 
 # === Firebase Setup ===
 if not firebase_admin._apps:
-    cred = credentials.Certificate("websampah-31358-firebase-adminsdk-fbsvc-b5d459f63d.json")
+    cred = credentials.Certificate("websampah-31358-firebase-adminsdk-fbsvc-9be0fc3d2b.json")
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -23,8 +23,19 @@ def get_detections():
     rows = []
     for doc in docs:
         data = doc.to_dict()
+        data["id"] = doc.id   # simpan id dokumen untuk hapus per item
         rows.append(data)
     return rows
+
+# === Hapus semua data ===
+def delete_all_detections():
+    docs = db.collection("detections").stream()
+    for doc in docs:
+        doc.reference.delete()
+
+# === Hapus satu data ===
+def delete_one_detection(doc_id):
+    db.collection("detections").document(doc_id).delete()
 
 # === Build tabel HTML ===
 def build_table_rows(data):
@@ -50,6 +61,11 @@ def build_table_rows(data):
             </div>
           </td>
           <td>{img_tag}</td>
+          <td>
+            <form action="" method="post">
+              <input type="hidden" name="delete_id" value="{row.get('id')}">
+            </form>
+          </td>
         </tr>
         """
     return rows_html
@@ -87,12 +103,28 @@ with left:
     st.markdown("### Data Deteksi Sampah")
     data = get_detections()
 
+    # tombol hapus semua
+    if st.button("🗑️ Hapus Semua Data"):
+        delete_all_detections()
+        st.success("Semua data berhasil dihapus.")
+        st.rerun()
+
+    # tampilkan data
     template_html = Path(TEMPLATE_PATH).read_text(encoding="utf-8")
     template_html = template_html.replace("{{TABLE_ROWS}}", build_table_rows(data))
     template_html = template_html.replace("{{TOTAL_DETEKSI}}", str(len(data)))
     template_html = template_html.replace("{{DETAIL_JENIS}}", build_detail_jenis(data))
 
     components.html(template_html, height=900, scrolling=True)
+
+    # hapus data per item (dropdown + tombol)
+    if data:
+        options = {f"{d['class']} - {d['timestamp']}": d["id"] for d in data}
+        selected = st.selectbox("Pilih data untuk dihapus:", list(options.keys()))
+        if st.button("Hapus Data Terpilih"):
+            delete_one_detection(options[selected])
+            st.success("Data berhasil dihapus.")
+            st.rerun()
 
 with right:
     st.markdown("### 📷 Gambar Terbaru")
