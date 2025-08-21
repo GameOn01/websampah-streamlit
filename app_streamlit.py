@@ -11,7 +11,7 @@ TEMPLATE_PATH = "index_template.html"
 
 # === Firebase Setup ===
 if not firebase_admin._apps:
-    cred = credentials.Certificate("websampah-31358-firebase-adminsdk-fbsvc-b5d459f63d.json")
+    cred = credentials.Certificate("websampah-31358-firebase-adminsdk-fbsvc-9be0fc3d2b.json")
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
